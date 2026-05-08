@@ -64,7 +64,7 @@ def extract_pcapng_to_csv(pcapng_file_path, output_csv_path):
             continue 
 
     if not packet_data:
-        print(f"   [!] No valid IP flows found after filtering.")
+        print(f"  No valid IP flows found after filtering.")
         return
 
     df = pd.DataFrame(packet_data)
