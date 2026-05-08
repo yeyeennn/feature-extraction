@@ -2,74 +2,90 @@ import os
 import pandas as pd
 from scapy.all import rdpcap, IP, IPv6, TCP, UDP
 
-
 def extract_pcapng_to_csv(pcapng_file_path, output_csv_path):
     print(f"Processing: {os.path.basename(pcapng_file_path)}...")
 
     try:
         packets = rdpcap(pcapng_file_path)
     except Exception as e:
-        print(f"  [!] Error reading file: {e}")
+        print(f"   Error reading file: {e}")
         return
 
     if len(packets) == 0:
-        print("  [!] No packets found.")
+        print("   No packets found.")
         return
 
     packet_data = []
     
     for packet in packets:
         try:
-            
-            # This bypasses the strict .haslayer(IP) check
+  
             p_layer = None
-            if packet.haslayer('IP'): p_layer = packet['IP']
-            elif packet.haslayer('IPv6'): p_layer = packet['IPv6']
+            if packet.haslayer(IP): 
+                p_layer = packet[IP]
+            elif packet.haslayer(IPv6): 
+                p_layer = packet[IPv6]
+
+            if p_layer is None:
+                continue 
+
+            src_ip = p_layer.src
+            dst_ip = p_layer.dst
+            timestamp = float(packet.time)
+            length = len(packet)
+
+   
+            src_port, dst_port, proto = 0, 0, None
+            if packet.haslayer(TCP):
+                src_port, dst_port, proto = packet[TCP].sport, packet[TCP].dport, "TCP"
+            elif packet.haslayer(UDP):
+                src_port, dst_port, proto = packet[UDP].sport, packet[UDP].dport, "UDP"
             
-            # If standard IP layers fail, we look for the payload of the Ethernet frame
-            if p_layer is None and packet.payload:
-                p_layer = packet.payload
 
-            if p_layer:
-                # Use getattr to avoid crashes if src/dst aren't named exactly right
-                src_ip = getattr(p_layer, 'src', '0.0.0.0')
-                dst_ip = getattr(p_layer, 'dst', '0.0.0.0')
-                
-                # Check for Transport Layer
-                src_port, dst_port, proto = 0, 0, "OTHER"
-                if packet.haslayer(TCP):
-                    src_port, dst_port, proto = packet[TCP].sport, packet[TCP].dport, "TCP"
-                elif packet.haslayer(UDP):
-                    src_port, dst_port, proto = packet[UDP].sport, packet[UDP].dport, "UDP"
+            if proto is None:
+                continue
 
-                packet_data.append({
-                    "Timestamp": float(packet.time),
-                    "Source IP": src_ip,
-                    "Destination IP": dst_ip,
-                    "Source Port": src_port,
-                    "Destination Port": dst_port,
-                    "Protocol": proto,
-                    "Length": len(packet)
-                })
-        except:
-            continue # Skip malformed packets
+            ips = sorted([src_ip, dst_ip])
+            ports = sorted([src_port, dst_port])
+            biflow_id = f"{ips[0]}_{ips[1]}_{ports[0]}_{ports[1]}_{proto}"
+
+            packet_data.append({
+                "Timestamp": timestamp,
+                "Biflow_ID": biflow_id,
+                "Source IP": src_ip,
+                "Destination IP": dst_ip,
+                "Source Port": src_port,
+                "Destination Port": dst_port,
+                "Protocol": proto,
+                "Length": length
+            })
+        except Exception:
+            
+            continue 
 
     if not packet_data:
-        print(f"  [!] Still no IP data found. We might need to check the DLT (Link Type).")
+        print(f"   [!] No valid IP flows found after filtering.")
         return
 
     df = pd.DataFrame(packet_data)
+    
+    df = df.sort_values(by=["Biflow_ID", "Timestamp"])
+    
+    num_flows = df['Biflow_ID'].nunique()
+    print(f"   Success: Extracted {len(packet_data)} packets across {num_flows} unique flows!\n")
+    
     df.to_csv(output_csv_path, index=False)
-    print(f"  Success: Extracted {len(packet_data)} packets!\n")
+    print(f"   Success: Extracted {len(packet_data)} valid flow packets!\n")
 
 if __name__ == "__main__":
+    
     script_dir = os.path.dirname(os.path.abspath(__file__))
     project_root = os.path.dirname(os.path.dirname(script_dir))
 
     captures_folder = os.path.join(project_root, "captures")
     output_folder = os.path.join(project_root, "parsed_packets")
 
-    print(f"--- PCAPNG to CSV Converter ---")
+    print(f"PCAPNG to High-Integrity CSV Converter")
     
     if not os.path.exists(captures_folder):
         print(f"ERROR: Folder not found: {captures_folder}")
